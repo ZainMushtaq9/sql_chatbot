@@ -8,3 +8,7 @@ langchain-groq
 faiss-cpu
 huggingface-hub
 sentence-transformers
+streamlit
+requests
+pandas
+plotly
