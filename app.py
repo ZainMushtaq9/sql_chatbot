@@ -1,20 +1,13 @@
 import streamlit as st
 import requests
 import pandas as pd
-import plotly.express as px
 import os
 import re
 import uuid
 
 # --- Configuration ---
-# The base URL for your Flask backend.
 # BACKEND_BASE_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:5000")
-
-
 BACKEND_BASE_URL = os.getenv("BACKEND_URL", "http://15.235.9.166:5002")
-
-
-
 QUERY_URL = f"{BACKEND_BASE_URL}/query"
 DISCOVER_CONTENT_URL = f"{BACKEND_BASE_URL}/discover-content"
 HEALTH_CHECK_URL = f"{BACKEND_BASE_URL}/"
@@ -22,19 +15,18 @@ HEALTH_CHECK_URL = f"{BACKEND_BASE_URL}/"
 # --- Page Configuration ---
 st.set_page_config(
     layout="wide",
-    page_title="Conversational AI Database Agent",
+    page_title="AI Database Agent",
     page_icon="🤖"
 )
 
-# --- Helper Functions ---
-
+# --- Helper Functions (No changes needed here) ---
 def make_api_request(url, method="GET", json_data=None, timeout=60):
-    """A robust function to handle HTTP requests to the backend API."""
     try:
+        headers = {'Content-Type': 'application/json'}
         if method.upper() == "POST":
-            response = requests.post(url, json=json_data, timeout=timeout)
+            response = requests.post(url, json=json_data, timeout=timeout, headers=headers)
         else:
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=timeout, headers=headers)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.HTTPError as http_err:
@@ -44,103 +36,73 @@ def make_api_request(url, method="GET", json_data=None, timeout=60):
             error_msg = f"{error_details.get('error', 'An HTTP error occurred')}: {details_msg}"
             return None, error_msg
         except:
-            return None, f"An HTTP error occurred: {http_err}"
+            return None, f"An HTTP error occurred: {http_err.response.text}"
     except requests.exceptions.ConnectionError:
-        return None, f"Connection Error: Could not connect to the backend at {BACKEND_BASE_URL}. Is it running?"
+        return None, "Connection Error: Backend is unreachable."
     except Exception as e:
         return None, f"An unexpected error occurred: {e}"
 
 def format_sql(sql_query):
-    """Formats SQL for better readability in the UI."""
     if not isinstance(sql_query, str): return ""
     keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'ON', 'GROUP BY', 'ORDER BY', 'LIMIT']
     for keyword in keywords:
         sql_query = re.sub(rf'\b({keyword})\b', f'\n{keyword}', sql_query, flags=re.IGNORECASE)
     return sql_query.strip()
 
-def create_visualization(df):
-    """Analyzes a DataFrame and creates a relevant Plotly chart if possible."""
-    if df.empty or len(df.columns) < 2: return None
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-    if not numeric_cols or not categorical_cols: return None
-
-    try:
-        if df[categorical_cols[0]].nunique() > 1 and df[categorical_cols[0]].nunique() < 50:
-             return px.bar(df, x=categorical_cols[0], y=numeric_cols[0],
-                           title=f"Bar Chart: {numeric_cols[0]} by {categorical_cols[0]}", text_auto=True)
-    except Exception:
-        return None
-    return None
-
 def generate_session_id():
-    """Generates a unique session ID for a new conversation."""
     return f"st-session-{uuid.uuid4()}"
 
 # --- Session State Initialization ---
+# The session now persists for the lifetime of the browser tab.
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "session_id" not in st.session_state:
     st.session_state.session_id = generate_session_id()
 
-# --- Sidebar UI ---
-with st.sidebar:
-    st.title("🧰 AI Database Agent")
-    st.markdown("This agent can answer questions about your database and remembers the context of your conversation.")
-    
-    st.header("Session Controls")
-    st.info(f"Current Session ID: `{st.session_state.session_id}`")
-    
-    if st.button("Start New Chat Session"):
-        st.session_state.messages = []
-        st.session_state.session_id = generate_session_id()
-        st.rerun()
+# --- Main Page Layout ---
 
-    st.header("System")
-    if st.button("Check Backend Status"):
-        with st.spinner("Pinging backend..."):
-            _, error = make_api_request(HEALTH_CHECK_URL)
-            if error: st.error(f"Backend Offline: {error}")
-            else: st.success("Backend is connected and running.")
+# Title and Admin controls are now at the top of the main page
+st.title("💬 AI Database Agent")
 
-    st.header("Database Setup")
-    if st.button("Discover/Refresh Schema", help="This scans your database and teaches the AI about its structure. Run this once to get started."):
+with st.expander("Admin & Setup"):
+    st.markdown("Use this to teach the AI about your database schema.")
+    if st.button("Discover/Refresh Schema"):
         with st.spinner("Analyzing and embedding database schema..."):
             data, error = make_api_request(DISCOVER_CONTENT_URL, method="POST")
-            if error: st.error(f"Discovery Failed: {error}")
-            else: st.success(f"Discovery complete! {data.get('documents_added', 0)} schema documents were indexed.")
+            if error:
+                st.error(f"Discovery Failed: {error}")
+            else:
+                st.success(f"Discovery complete! {data.get('documents_added', 0)} documents indexed.")
 
 # --- Main Chat Interface ---
-st.header("💬 Chat with your Database")
-st.caption("You can ask follow-up questions to refine your results.")
 
-# Display the chat history from the session state
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        
-        # This block is responsible for showing the SQL and results for assistant messages
-        if message["role"] == "assistant":
-            # Show the SQL query in an expandable section
-            if "sql" in message and message["sql"]:
-                with st.expander("View Generated SQL"):
-                    st.code(format_sql(message["sql"]), language="sql")
-            
-            # Show the results in a table if they exist
-            if "df" in message and not message["df"].empty:
-                st.dataframe(message["df"], use_container_width=True)
-                fig = create_visualization(message["df"])
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+# A container for the chat history
+chat_container = st.container()
+
+with chat_container:
+    # Display the chat history from the session state
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            # For assistant messages, we might have structured content
+            if isinstance(message["content"], dict):
+                st.markdown(message["content"]["summary"])
+                if message["content"]["sql"]:
+                    with st.expander("View Generated SQL"):
+                        st.code(format_sql(message["content"]["sql"]), language="sql")
+                if not message["content"]["df"].empty:
+                    st.dataframe(message["content"]["df"], use_container_width=True)
+            else:
+                # For user messages or simple text responses
+                st.markdown(message["content"])
 
 # The chat input box at the bottom of the page
 if prompt := st.chat_input("Ask a question about your data..."):
-    # Add user's message to the chat history and display it
+    # Add user message to history and display it immediately
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Send the user's query to the backend
+    # Send the query to the backend and handle the response
     with st.chat_message("assistant"):
         with st.spinner("🤖 Thinking..."):
             json_payload = {
@@ -155,24 +117,42 @@ if prompt := st.chat_input("Ask a question about your data..."):
             elif response:
                 sql_query = response.get("sql_query")
                 results_list = response.get("results", [])
+                df = pd.DataFrame(results_list) if results_list else pd.DataFrame()
                 
-                # Prepare the user-friendly text response
-                assistant_response_content = f"I found {len(results_list)} results."
+                # Create a user-friendly text summary
+                summary_text = f"I found {len(results_list)} results."
                 if not results_list and "SELECT" in (sql_query or "").upper():
-                    assistant_response_content = "I ran the query successfully, but it returned no results."
-                elif not sql_query:
-                     assistant_response_content = "I was unable to generate a SQL query for your request."
-                st.markdown(assistant_response_content)
-
-                # Store the complete response (text, SQL, and DataFrame) in the session state
-                assistant_message = {
-                    "role": "assistant",
-                    "content": assistant_response_content,
-                    "sql": sql_query,
-                    "df": pd.DataFrame(results_list) if results_list else pd.DataFrame()
-                }
-                st.session_state.messages.append(assistant_message)
+                    summary_text = "The query ran successfully, but returned no results."
                 
-                # Rerun the script to display the new message with all its elements
-                # This happens automatically after the 'with' block finishes
+                # Store the full response (text, SQL, and DataFrame) in the session state
+                assistant_response = {
+                    "summary": summary_text,
+                    "sql": sql_query,
+                    "df": df
+                }
+                st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+                
+                # Rerun the script to display the new message from the session state
                 st.rerun()
+
+# --- Connection Status Indicator ---
+# This CSS places the status indicator in the bottom-left corner.
+st.markdown("""
+    <style>
+    .status-indicator {
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        background-color: #f0f2f6;
+        border-radius: 5px;
+        padding: 5px 10px;
+        font-size: 14px;
+        border: 1px solid #dcdcdc;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Check the backend status once per session and display it.
+_, error = make_api_request(HEALTH_CHECK_URL)
+status_text = "🟢 Backend Connected" if not error else "🔴 Backend Disconnected"
+st.markdown(f'<div class="status-indicator">{status_text}</div>', unsafe_allow_html=True)
